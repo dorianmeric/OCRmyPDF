@@ -12,6 +12,7 @@ from ocrmypdf.imageops import (
     bytes_per_pixel,
     calculate_downsample,
     downsample_image,
+    downsample_image_to_maxdpi,
 )
 
 
@@ -56,3 +57,27 @@ def test_downsample_image():
     ds = downsample_image(im, (50, 50))
     assert ds.size == (50, 50)
     assert ds.info['dpi'] == (150, 150)
+
+
+def test_downsample_image_to_dpi_when_above_target():
+    im = Image.new('RGB', (1200, 600))
+    im.info['dpi'] = (600, 300)
+    ds = downsample_image_to_maxdpi(im, 300)
+
+    assert ds.size == (600, 300)
+    assert ds.info['dpi'][0] <= 300
+    assert ds.info['dpi'][1] <= 300
+
+
+def test_downsample_image_to_dpi_no_change_when_within_target():
+    im = Image.new('RGB', (500, 500))
+    im.info['dpi'] = (200, 200)
+
+    ds = downsample_image_to_maxdpi(im, 300)
+    assert ds is im
+
+
+def test_downsample_image_to_dpi_no_change_without_valid_dpi():
+    im = Image.new('RGB', (500, 500))
+    ds = downsample_image_to_maxdpi(im, 300)
+    assert ds is im

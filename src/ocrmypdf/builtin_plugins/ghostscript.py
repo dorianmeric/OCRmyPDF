@@ -58,7 +58,7 @@ class GhostscriptOptions(BaseModel):
         int | None,
         Field(
             ge=1,
-            description="Maximum DPI for Ghostscript JPEG downsampling during PDF/A generation",
+            description="Maximum DPI for image downsampling during optimization",
         ),
     ] = None
 
@@ -99,8 +99,8 @@ class GhostscriptOptions(BaseModel):
             metavar='DPI',
             default=None,
             help=(
-                "Downsample color, grayscale, and monochrome images in Ghostscript "
-                "PDF/A output to the specified maximum DPI."
+                "Downsample images whose DPI exceeds this target during "
+                "optimization."
             ),
         )
 
@@ -370,7 +370,6 @@ def generate_pdfa(
         compression=context.options.ghostscript.pdfa_image_compression,
         color_conversion_strategy=context.options.ghostscript.color_conversion_strategy,
         jpeg_quality=context.options.jpeg_quality,
-        jpeg_maxdpi=context.options.ghostscript.jpeg_maxdpi,
         pdf_version=pdf_version,
         pdfa_part=pdfa_part,
         progressbar_class=progressbar_class,

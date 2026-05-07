@@ -38,6 +38,7 @@ from ocrmypdf._jobcontext import PdfContext
 from ocrmypdf._progressbar import ProgressBar
 from ocrmypdf.exceptions import OutputFileAccessError
 from ocrmypdf.helpers import IMG2PDF_KWARGS, safe_symlink
+from ocrmypdf.imageops import downsample_image_to_maxdpi
 
 log = logging.getLogger(__name__)
 
@@ -192,6 +193,11 @@ def extract_image_jbig2(
 
 
 def _should_optimize_jpeg(options, filtdp):
+    del filtdp  # reserved for future JPEG filter-specific checks
+    # When max DPI is requested, force JPEG extraction so we can downsample
+    # in Python before writing image data back into the PDF.
+    if options.jpeg_maxdpi is not None:
+        return True
     if options.optimize >= 2:
         return True
     # Ghostscript 10.6.0+ introduced some sort of JPEG encoding issue.
@@ -442,13 +448,38 @@ def convert_to_jbig2(
 
 
 def _optimize_jpeg(
-    xref: Xref, in_jpg: Path, opt_jpg: Path, jpg_quality: int
+    xref: Xref,
+    in_jpg: Path,
+    opt_jpg: Path,
+    jpg_quality: int,
+    jpeg_maxdpi: int | None,
 ) -> tuple[Xref, Path | None]:
     with Image.open(in_jpg) as im:
+        # Downsample first (if needed), then apply standard JPEG re-encoding.
+        original_size = im.size
+        resample = Image.Resampling.NEAREST if im.mode == '1' else Image.Resampling.LANCZOS
+        im_to_save = downsample_image_to_maxdpi(
+            im,
+            jpeg_maxdpi,
+            resample_mode=resample,
+        )
+        if im_to_save is not im:
+            log.debug(
+                "xref %s: downsampled image from %sx%s to %sx%s",
+                xref,
+                original_size[0],
+                original_size[1],
+                im_to_save.width,
+                im_to_save.height,
+            )
         save_kwargs: dict[str, Any] = {'optimize': True}
         if isinstance(jpg_quality, int) and 0 < jpg_quality <= 100:
             save_kwargs['quality'] = jpg_quality
-        im.save(opt_jpg, **save_kwargs)
+        if 'dpi' in im_to_save.info:
+            save_kwargs['dpi'] = im_to_save.info['dpi']
+        im_to_save.save(opt_jpg, **save_kwargs)
+        if im_to_save is not im:
+            im_to_save.close()
 
     if opt_jpg.stat().st_size > in_jpg.stat().st_size:
         log.debug(f"xref {xref}, jpeg, made larger - skip")
@@ -462,11 +493,11 @@ def transcode_jpegs(
 ) -> None:
     """Optimize JPEGs according to optimization settings."""
 
-    def jpeg_args() -> Iterator[tuple[Xref, Path, Path, int]]:
+    def jpeg_args() -> Iterator[tuple[Xref, Path, Path, int, int | None]]:
         for xref in jpegs:
             in_jpg = jpg_name(root, xref)
             opt_jpg = in_jpg.with_suffix('.opt.jpg')
-            yield xref, in_jpg, opt_jpg, options.jpg_quality
+            yield xref, in_jpg, opt_jpg, options.jpg_quality, options.jpeg_maxdpi
 
     def finish_jpeg(result: tuple[Xref, Path | None], pbar: ProgressBar):
         xref, opt_jpg = result
@@ -591,7 +622,12 @@ def deflate_jpegs(pdf: Pdf, root: Path, options, executor: Executor) -> None:
     )
 
 
-def _transcode_png(pdf: Pdf, filename: Path, xref: Xref) -> bool:
+def _transcode_png(
+    pdf: Pdf, filename: Path, xref: Xref, jpeg_maxdpi: int | None
+) -> bool:
+    # Downsample prior to PNG->PDF image conversion so the embedded image stream
+    # reflects the target DPI.
+    _downsample_image_file_for_maxdpi(filename, jpeg_maxdpi, xref)
     output = filename.with_suffix('.png.pdf')
     with output.open('wb') as f:
         img2pdf.convert(fspath(filename), outputstream=f, **IMG2PDF_KWARGS)
@@ -672,9 +708,49 @@ def transcode_pngs(
             task_arguments=pngquant_args(),
         )
 
+    if options.jpeg_maxdpi is not None:
+        # For DPI capping, process all extracted PNG candidates, even when
+        # pngquant is not active at the selected optimize level.
+        modified.update(images)
+
     for xref in modified:
         filename = png_name(root, xref)
-        _transcode_png(pdf, filename, xref)
+        _transcode_png(pdf, filename, xref, options.jpeg_maxdpi)
+
+
+def _downsample_image_file_for_maxdpi(
+    image_file: Path, jpeg_maxdpi: int | None, xref: Xref
+) -> bool:
+    if jpeg_maxdpi is None:
+        return False
+
+    with Image.open(image_file) as im:
+        original_size = im.size
+        resample = Image.Resampling.NEAREST if im.mode == '1' else Image.Resampling.LANCZOS
+        resized = downsample_image_to_maxdpi(
+            im,
+            jpeg_maxdpi,
+            resample_mode=resample,
+        )
+        if resized is im:
+            return False
+
+        log.debug(
+            "xref %s: downsampled image from %sx%s to %sx%s",
+            xref,
+            original_size[0],
+            original_size[1],
+            resized.width,
+            resized.height,
+        )
+
+        # Preserve updated DPI metadata when the target format supports it.
+        save_kwargs: dict[str, Any] = {}
+        if 'dpi' in resized.info:
+            save_kwargs['dpi'] = resized.info['dpi']
+        resized.save(image_file, **save_kwargs)
+        resized.close()
+        return True
 
 
 DEFAULT_EXECUTOR = SerialExecutor()
@@ -711,6 +787,14 @@ def optimize(
         transcode_pngs(pdf, pngs, png_name, root, options, executor)
 
         jbig2_images = extract_images_jbig2(pdf, root, options)
+        if options.jpeg_maxdpi is not None:
+            # Cap source image DPI before bitonal JBIG2 conversion.
+            for xref_ext in jbig2_images:
+                _downsample_image_file_for_maxdpi(
+                    img_name(root, xref_ext.xref, xref_ext.ext),
+                    options.jpeg_maxdpi,
+                    xref_ext.xref,
+                )
         convert_to_jbig2(pdf, jbig2_images, root, options, executor)
 
         target_file = output_file.with_suffix('.opt.pdf')

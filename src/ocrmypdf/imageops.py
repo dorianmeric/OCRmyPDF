@@ -149,3 +149,49 @@ def downsample_image(
     )
     log.debug(f"Rescaled image to {image.size} pixels and {image.info['dpi']} dpi")
     return image
+
+
+def downsample_image_to_maxdpi(
+    image: Image.Image,
+    max_dpi: int | None,
+    *,
+    resample_mode: Image.Resampling = Image.Resampling.BICUBIC,
+    reducing_gap: int = 3,
+) -> Image.Image:
+    """Downsample an image only when its DPI exceeds the target.
+
+    If the image has no usable DPI metadata, or is already at/below target,
+    the original image object is returned unchanged.
+    """
+    if max_dpi is None or max_dpi <= 0:
+        return image
+
+    dpi = image.info.get('dpi')
+    if not isinstance(dpi, (tuple, list)) or len(dpi) != 2:
+        return image
+
+    try:
+        xdpi = float(dpi[0])
+        ydpi = float(dpi[1])
+    except (TypeError, ValueError):
+        return image
+
+    if xdpi <= 0 or ydpi <= 0:
+        return image
+    if xdpi <= max_dpi and ydpi <= max_dpi:
+        return image
+
+    scale = min(max_dpi / xdpi, max_dpi / ydpi)
+    new_size = (
+        max(1, int(round(image.width * scale))),
+        max(1, int(round(image.height * scale))),
+    )
+    if new_size == image.size:
+        return image
+
+    return downsample_image(
+        image,
+        new_size,
+        resample_mode=resample_mode,
+        reducing_gap=reducing_gap,
+    )

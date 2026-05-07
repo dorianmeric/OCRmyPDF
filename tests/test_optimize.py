@@ -378,3 +378,29 @@ def test_extract_image_filter_with_rgb_smask_matte():
         Matte=Array([1, 2, 3]),
     )
     assert extract_image_filter(image, None) is None
+
+
+def test_downsample_image_file_for_maxdpi_jpeg(tmp_path):
+    image_file = tmp_path / 'input.jpg'
+    with Image.new('RGB', (1200, 600), color='white') as im:
+        im.save(image_file, dpi=(600, 300))
+
+    changed = opt._downsample_image_file_for_maxdpi(image_file, 300, 1)
+
+    assert changed is True
+    with Image.open(image_file) as out:
+        assert out.size == (600, 300)
+        assert out.info['dpi'][0] <= 300
+        assert out.info['dpi'][1] <= 300
+
+
+def test_downsample_image_file_for_maxdpi_no_change_when_within_target(tmp_path):
+    image_file = tmp_path / 'input.png'
+    with Image.new('RGB', (500, 500), color='white') as im:
+        im.save(image_file, dpi=(200, 200))
+
+    changed = opt._downsample_image_file_for_maxdpi(image_file, 300, 2)
+
+    assert changed is False
+    with Image.open(image_file) as out:
+        assert out.size == (500, 500)
