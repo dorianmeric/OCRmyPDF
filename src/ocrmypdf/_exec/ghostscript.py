@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import shlex
 from collections import deque
 from os import fspath
 from pathlib import Path
@@ -277,6 +278,7 @@ def generate_pdfa(
     output_file: os.PathLike,
     *,
     compression: str,
+    ghostscript_compression_args: str | None = None,
     color_conversion_strategy: str,
     pdf_version: str = '1.5',
     pdfa_part: str = '2',
@@ -314,6 +316,17 @@ def generate_pdfa(
         # https://bugs.ghostscript.com/show_bug.cgi?id=705187
         compression_args.append('-dNEWPDF=false')
 
+    def _arg_key(arg: str) -> str | None:
+        if not arg.startswith('-'):
+            return None
+        if '=' in arg:
+            return arg.split('=', 1)[0]
+        return arg
+
+    user_compression_args: list[str] = []
+    if ghostscript_compression_args:
+        user_compression_args = shlex.split(ghostscript_compression_args)
+
     if os.name == 'nt':
         # Windows has lots of fatal "permission denied" errors
         stop_on_error = False
@@ -333,9 +346,8 @@ def generate_pdfa(
             f"-sColorConversionStrategy={color_conversion_strategy}",
         ]
         + (['-dPDFSTOPONERROR'] if stop_on_error else [])
-        + compression_args
+        + [*compression_args, '-dJPEGQ=95']
         + [
-            "-dJPEGQ=95",
             "-dSubsetFonts=false",  # Prevents GS from messing up some encodings
             f"-dPDFA={pdfa_part}",
             "-dPDFACompatibilityPolicy=1",
@@ -344,6 +356,18 @@ def generate_pdfa(
             "-sstdout=%stderr",  # Literal %s, not string interpolation
         ]
     )
+
+    # Reconcile user-supplied compression args against the final command so
+    # user values override any defaults already present in args_gs.
+    if user_compression_args:
+        user_keys = {
+            key
+            for key in (_arg_key(arg) for arg in user_compression_args)
+            if key is not None
+        }
+        args_gs = [arg for arg in args_gs if _arg_key(arg) not in user_keys]
+        args_gs.extend(user_compression_args)
+
     args_gs.extend(fspath(s) for s in pdf_pages)  # Stringify Path objs
     try:
         with GhostscriptFollower(progressbar_class) as pbar:

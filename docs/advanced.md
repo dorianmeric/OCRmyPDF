@@ -419,6 +419,22 @@ curves. In this case, you may want to use a different color conversion
 strategy. The `--color-conversion-strategy` option allows you to select a
 different strategy, such as `RGB`.
 
+## Custom Ghostscript compression arguments
+
+When Ghostscript is used for PDF/A conversion (`--output-type auto` fallback or
+`--output-type pdfa*`), OCRmyPDF sets compression-related Ghostscript options
+automatically.
+
+Use `--ghostscript-compression-args` to pass additional Ghostscript arguments as
+a single string:
+
+```bash
+ocrmypdf --ghostscript-compression-args "-dJPEGQ=10 -dColorImageResolution=100" input.pdf output.pdf
+```
+
+If an argument in `--ghostscript-compression-args` duplicates one OCRmyPDF
+already sets by default, your value takes precedence.
+
 ## PDF/A output modes
 
 :::{versionchanged} 17.0.0

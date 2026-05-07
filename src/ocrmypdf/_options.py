@@ -214,6 +214,7 @@ class OcrOptions(BaseModel):
 
     # Ghostscript options - also accessible via options.ghostscript.<field>
     pdfa_image_compression: str | None = None
+    ghostscript_compression_args: str | None = None
     color_conversion_strategy: str = "LeaveColorUnchanged"
 
     # Optimize/JBIG2 options - also accessible via options.optimize.<field>

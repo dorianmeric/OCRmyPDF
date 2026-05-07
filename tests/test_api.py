@@ -178,6 +178,7 @@ def test_nested_plugin_option_access():
         tesseract_timeout=120.0,
         tesseract_oem=1,
         optimize=2,
+        ghostscript_compression_args='-dJPEGQ=10',
     )
 
     # Test flat access still works
@@ -195,6 +196,7 @@ def test_nested_plugin_option_access():
     ghostscript = options.ghostscript
     assert ghostscript is not None
     assert ghostscript.color_conversion_strategy == "LeaveColorUnchanged"
+    assert ghostscript.ghostscript_compression_args == '-dJPEGQ=10'
 
     # Test that cached instances are returned
     assert options.tesseract is tesseract
@@ -221,3 +223,22 @@ def test_default_tesseract_timeout():
 
     # The plugin default (180s) should be used when tesseract_timeout is None
     assert options.tesseract.timeout == 180.0
+
+
+def test_ghostscript_compression_args_help_and_mapping():
+    from ocrmypdf.api import create_options, setup_plugin_infrastructure
+    from ocrmypdf.cli import get_parser
+
+    pm = setup_plugin_infrastructure()
+    parser = get_parser()
+    pm.add_options(parser=parser)
+
+    options = create_options(
+        input_file='test.pdf',
+        output_file='output.pdf',
+        parser=parser,
+        ghostscript_compression_args='-dJPEGQ=10',
+    )
+
+    assert '--ghostscript-compression-args' in parser.format_help()
+    assert options.ghostscript_compression_args == '-dJPEGQ=10'

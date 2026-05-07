@@ -221,6 +221,52 @@ def test_rasterize_pdf_errors(resources, no_outpdf, caplog):
         assert "invalid page image file" in caplog.text
 
 
+def test_generate_pdfa_user_compression_args_override_defaults():
+    with (
+        patch('ocrmypdf._exec.ghostscript.run_polling_stderr') as mock_run,
+        patch('ocrmypdf._exec.ghostscript.version', return_value=Version('10.5.0')),
+    ):
+        mock_run.return_value = subprocess.CompletedProcess(
+            ['fakegs'], returncode=0, stdout='', stderr=''
+        )
+
+        ghostscript.generate_pdfa(
+            pdf_pages=['in.pdf'],
+            output_file='out.pdf',
+            compression='jpeg',
+            ghostscript_compression_args='-dJPEGQ=10 -dColorImageFilter=/FlateEncode',
+            color_conversion_strategy='LeaveColorUnchanged',
+        )
+
+    args_gs = mock_run.call_args.args[0]
+    assert '-dJPEGQ=95' not in args_gs
+    assert '-dJPEGQ=10' in args_gs
+    assert '-dColorImageFilter=/DCTEncode' not in args_gs
+    assert '-dColorImageFilter=/FlateEncode' in args_gs
+
+
+def test_generate_pdfa_user_compression_args_extend_defaults():
+    with (
+        patch('ocrmypdf._exec.ghostscript.run_polling_stderr') as mock_run,
+        patch('ocrmypdf._exec.ghostscript.version', return_value=Version('10.5.0')),
+    ):
+        mock_run.return_value = subprocess.CompletedProcess(
+            ['fakegs'], returncode=0, stdout='', stderr=''
+        )
+
+        ghostscript.generate_pdfa(
+            pdf_pages=['in.pdf'],
+            output_file='out.pdf',
+            compression='jpeg',
+            ghostscript_compression_args='-dColorImageResolution=100',
+            color_conversion_strategy='LeaveColorUnchanged',
+        )
+
+    args_gs = mock_run.call_args.args[0]
+    assert '-dColorImageFilter=/DCTEncode' in args_gs
+    assert '-dColorImageResolution=100' in args_gs
+
+
 class TestDuplicateFilter:
     @pytest.fixture(scope='function')
     def duplicate_filter_logger(self):

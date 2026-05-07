@@ -433,6 +433,7 @@ def ocr(
     tesseract_downsample_large_images: bool | None = None,
     rotate_pages_threshold: float | None = None,
     pdfa_image_compression: str | None = None,
+    ghostscript_compression_args: str | None = None,
     color_conversion_strategy: str | None = None,
     user_words: os.PathLike | None = None,
     user_patterns: os.PathLike | None = None,
@@ -496,6 +497,7 @@ def ocr(  # noqa: D417
     tesseract_downsample_large_images: bool | None = None,
     rotate_pages_threshold: float | None = None,
     pdfa_image_compression: str | None = None,
+    ghostscript_compression_args: str | None = None,
     color_conversion_strategy: str | None = None,
     user_words: os.PathLike | None = None,
     user_patterns: os.PathLike | None = None,
@@ -855,6 +857,7 @@ def _hocr_to_ocr_pdf(  # noqa: D417
     jbig2_page_group_size: int | None = None,  # Deprecated, ignored
     jbig2_threshold: float | None = None,
     pdfa_image_compression: str | None = None,
+    ghostscript_compression_args: str | None = None,
     color_conversion_strategy: str | None = None,
     fast_web_view: float | None = None,
     plugin_manager=None,

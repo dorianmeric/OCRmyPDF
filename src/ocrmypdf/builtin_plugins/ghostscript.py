@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import logging
+import shlex
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
@@ -54,6 +55,15 @@ class GhostscriptOptions(BaseModel):
     pdfa_image_compression: Annotated[
         PdfaImageCompression, Field(description="PDF/A image compression method")
     ] = PdfaImageCompression.AUTO
+    ghostscript_compression_args: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Additional Ghostscript compression arguments. "
+                "In case a conflict occurs, user arguments override OCRmyPDF defaults."
+            )
+        ),
+    ] = None
 
     @classmethod
     def add_arguments_to_parser(cls, parser, namespace: str = 'ghostscript'):
@@ -85,6 +95,16 @@ class GhostscriptOptions(BaseModel):
             "are applied to all pages, including those for which OCR was "
             "skipped.  Not supported for --output-type=pdf ; that setting "
             "preserves the original compression of all images.",
+        )
+        gs.add_argument(
+            '--ghostscript-compression-args',
+            type=str,
+            default=None,
+            metavar='ARGS',
+            help="Additional Ghostscript compression options as a single string, "
+            "for example '-dJPEGQ=10 -dColorImageResolution=100'. "
+            "When the same option is provided by OCRmyPDF and ARGS, the ARGS "
+            "value overrides OCRmyPDF's default.",
         )
 
 
@@ -155,6 +175,21 @@ def check_options(options):
             "--pdfa-image-compression argument only applies when "
             "--output-type is 'auto' or one of 'pdfa', 'pdfa-1', 'pdfa-2', 'pdfa-3'"
         )
+    if (
+        options.ghostscript.ghostscript_compression_args
+        and options.output_type not in ('auto', 'pdfa', 'pdfa-1', 'pdfa-2', 'pdfa-3')
+    ):
+        log.warning(
+            "--ghostscript-compression-args only applies when --output-type "
+            "is 'auto' or one of 'pdfa', 'pdfa-1', 'pdfa-2', 'pdfa-3'"
+        )
+    if options.ghostscript.ghostscript_compression_args:
+        try:
+            shlex.split(options.ghostscript.ghostscript_compression_args)
+        except ValueError as e:
+            raise ValueError(
+                f"Invalid --ghostscript-compression-args: {e}"
+            ) from e
 
 
 @hookimpl
@@ -351,6 +386,9 @@ def generate_pdfa(
         pdf_pages=[pdfmark, *pdf_pages],
         output_file=output_file,
         compression=context.options.ghostscript.pdfa_image_compression,
+        ghostscript_compression_args=(
+            context.options.ghostscript.ghostscript_compression_args
+        ),
         color_conversion_strategy=context.options.ghostscript.color_conversion_strategy,
         pdf_version=pdf_version,
         pdfa_part=pdfa_part,
