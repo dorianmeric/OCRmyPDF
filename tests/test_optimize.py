@@ -6,13 +6,14 @@ from __future__ import annotations
 from io import BytesIO
 from os import fspath
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import img2pdf
 import pikepdf
 import pytest
 from pikepdf import Array, Dictionary, Name
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, features
 
 from ocrmypdf import optimize as opt
 from ocrmypdf._exec import jbig2enc, pngquant
@@ -27,6 +28,9 @@ needs_pngquant = pytest.mark.skipif(
 )
 needs_jbig2enc = pytest.mark.skipif(
     not jbig2enc.available(), reason="jbig2enc not installed"
+)
+needs_pillow_jpeg2000 = pytest.mark.skipif(
+    not features.check('jpg_2000'), reason="Pillow JPEG2000 support unavailable"
 )
 
 
@@ -343,6 +347,28 @@ def test_extract_image_filter_with_ccitt_group_3_image():
     assert extract_image_filter(image, None) is None
 
 
+def test_extract_image_generic_skips_bitonal_when_force_jpeg2k_enabled():
+    image = Dictionary()
+    image.Subtype = Name.Image
+    image.Length = 200
+    image.Width = 10
+    image.Height = 10
+    image.BitsPerComponent = 1
+    image.Filter = Name.FlateDecode
+    image.ColorSpace = Name.DeviceGray
+
+    options = SimpleNamespace(force_jpeg2k=True, optimize=3)
+    result = opt.extract_image_generic(
+        pdf=None,
+        root=Path('.'),
+        image=image,
+        xref=1,
+        options=options,
+    )
+
+    assert result is None
+
+
 # Triggers pikepdf bug
 # def test_extract_image_filter_with_decode_table():
 #     image = Dictionary()
@@ -404,3 +430,31 @@ def test_downsample_image_file_for_maxdpi_no_change_when_within_target(tmp_path)
     assert changed is False
     with Image.open(image_file) as out:
         assert out.size == (500, 500)
+
+
+def test_should_optimize_jpeg_when_force_jpeg2k_enabled():
+    options = SimpleNamespace(force_jpeg2k=True, jpeg_maxdpi=None, optimize=0)
+    assert opt._should_optimize_jpeg(options, filtdp=None) is True
+
+
+@needs_pillow_jpeg2000
+def test_optimize_jpeg_force_jpeg2k_creates_jpx(tmp_path):
+    in_jpg = tmp_path / 'input.jpg'
+    out_jp2 = tmp_path / 'output.jp2'
+
+    with Image.new('RGB', (256, 128), color='white') as im:
+        im.save(in_jpg, dpi=(300, 300))
+
+    _, result = opt._optimize_jpeg(
+        xref=1,
+        in_jpg=in_jpg,
+        opt_img=out_jp2,
+        jpg_quality=75,
+        jpeg_maxdpi=None,
+        force_jpeg2k=True,
+    )
+
+    assert result == out_jp2
+    assert out_jp2.exists()
+    with Image.open(out_jp2) as im:
+        assert im.size == (256, 128)

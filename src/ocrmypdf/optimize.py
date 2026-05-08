@@ -194,6 +194,8 @@ def extract_image_jbig2(
 
 def _should_optimize_jpeg(options, filtdp):
     del filtdp  # reserved for future JPEG filter-specific checks
+    if options.force_jpeg2k:
+        return True
     # When max DPI is requested, force JPEG extraction so we can downsample
     # in Python before writing image data back into the PDF.
     if options.jpeg_maxdpi is not None:
@@ -230,7 +232,7 @@ def extract_image_generic(
     elif (
         pim.indexed
         and pim.colorspace in pim.SIMPLE_COLORSPACES
-        and options.optimize >= 3
+        and (options.optimize >= 3 or options.force_jpeg2k)
     ):
         # Try to improve on indexed images - these are far from low hanging
         # fruit in most cases
@@ -450,9 +452,10 @@ def convert_to_jbig2(
 def _optimize_jpeg(
     xref: Xref,
     in_jpg: Path,
-    opt_jpg: Path,
+    opt_img: Path,
     jpg_quality: int,
     jpeg_maxdpi: int | None,
+    force_jpeg2k: bool,
 ) -> tuple[Xref, Path | None]:
     with Image.open(in_jpg) as im:
         # Downsample first (if needed), then apply standard JPEG re-encoding.
@@ -473,19 +476,32 @@ def _optimize_jpeg(
                 im_to_save.height,
             )
         save_kwargs: dict[str, Any] = {'optimize': True}
-        if isinstance(jpg_quality, int) and 0 < jpg_quality <= 100:
+        if force_jpeg2k:
+            # JPEG2000 encoder accepts grayscale/RGB; normalize unsupported modes.
+            jp2_image = _prepare_image_for_jpeg2000(im_to_save)
+            if jp2_image is not im_to_save:
+                if im_to_save is not im:
+                    im_to_save.close()
+                im_to_save = jp2_image
+            save_kwargs = {}
+        elif isinstance(jpg_quality, int) and 0 < jpg_quality <= 100:
             save_kwargs['quality'] = jpg_quality
         if 'dpi' in im_to_save.info:
             save_kwargs['dpi'] = im_to_save.info['dpi']
-        im_to_save.save(opt_jpg, **save_kwargs)
+        if force_jpeg2k:
+            im_to_save.save(opt_img, format='JPEG2000', **save_kwargs)
+        else:
+            im_to_save.save(opt_img, **save_kwargs)
         if im_to_save is not im:
             im_to_save.close()
 
-    if opt_jpg.stat().st_size > in_jpg.stat().st_size:
+    if not force_jpeg2k and opt_img.stat().st_size > in_jpg.stat().st_size:
         log.debug(f"xref {xref}, jpeg, made larger - skip")
-        opt_jpg.unlink()
+        opt_img.unlink()
         return xref, None
-    return xref, opt_jpg
+    return xref, opt_img
+
+
 
 
 def transcode_jpegs(
@@ -493,18 +509,32 @@ def transcode_jpegs(
 ) -> None:
     """Optimize JPEGs according to optimization settings."""
 
-    def jpeg_args() -> Iterator[tuple[Xref, Path, Path, int, int | None]]:
+    def jpeg_args() -> Iterator[tuple[Xref, Path, Path, int, int | None, bool]]:
         for xref in jpegs:
             in_jpg = jpg_name(root, xref)
-            opt_jpg = in_jpg.with_suffix('.opt.jpg')
-            yield xref, in_jpg, opt_jpg, options.jpg_quality, options.jpeg_maxdpi
+            opt_img = (
+                in_jpg.with_suffix('.opt.jp2')
+                if options.force_jpeg2k
+                else in_jpg.with_suffix('.opt.jpg')
+            )
+            yield (
+                xref,
+                in_jpg,
+                opt_img,
+                options.jpg_quality,
+                options.jpeg_maxdpi,
+                options.force_jpeg2k,
+            )
 
     def finish_jpeg(result: tuple[Xref, Path | None], pbar: ProgressBar):
         xref, opt_jpg = result
         if opt_jpg:
-            compdata = opt_jpg.read_bytes()  # JPEG can inserted into PDF as is
+            compdata = opt_jpg.read_bytes()
             im_obj = pdf.get_object(xref, 0)
-            im_obj.write(compdata, filter=Name.DCTDecode)
+            if options.force_jpeg2k:
+                im_obj.write(compdata, filter=Name.JPXDecode, decode_parms=None)
+            else:
+                im_obj.write(compdata, filter=Name.DCTDecode)
         pbar.update()
 
     executor(
@@ -623,11 +653,32 @@ def deflate_jpegs(pdf: Pdf, root: Path, options, executor: Executor) -> None:
 
 
 def _transcode_png(
-    pdf: Pdf, filename: Path, xref: Xref, jpeg_maxdpi: int | None
+    pdf: Pdf,
+    filename: Path,
+    xref: Xref,
+    jpeg_maxdpi: int | None,
+    force_jpeg2k: bool,
 ) -> bool:
     # Downsample prior to PNG->PDF image conversion so the embedded image stream
     # reflects the target DPI.
     _downsample_image_file_for_maxdpi(filename, jpeg_maxdpi, xref)
+
+    if force_jpeg2k:
+        jp2_out = filename.with_suffix('.opt.jp2')
+        with Image.open(filename) as im:
+            jp2_image = _prepare_image_for_jpeg2000(im)
+            save_kwargs: dict[str, Any] = {}
+            if 'dpi' in jp2_image.info:
+                save_kwargs['dpi'] = jp2_image.info['dpi']
+            jp2_image.save(jp2_out, format='JPEG2000', **save_kwargs)
+            if jp2_image is not im:
+                jp2_image.close()
+
+        compdata = jp2_out.read_bytes()
+        im_obj = pdf.get_object(xref, 0)
+        im_obj.write(compdata, filter=Name.JPXDecode, decode_parms=None)
+        return True
+
     output = filename.with_suffix('.png.pdf')
     with output.open('wb') as f:
         img2pdf.convert(fspath(filename), outputstream=f, **IMG2PDF_KWARGS)
@@ -708,14 +759,14 @@ def transcode_pngs(
             task_arguments=pngquant_args(),
         )
 
-    if options.jpeg_maxdpi is not None:
+    if options.jpeg_maxdpi is not None or options.force_jpeg2k:
         # For DPI capping, process all extracted PNG candidates, even when
         # pngquant is not active at the selected optimize level.
         modified.update(images)
 
     for xref in modified:
         filename = png_name(root, xref)
-        _transcode_png(pdf, filename, xref, options.jpeg_maxdpi)
+        _transcode_png(pdf, filename, xref, options.jpeg_maxdpi, options.force_jpeg2k)
 
 
 def _downsample_image_file_for_maxdpi(
@@ -751,6 +802,14 @@ def _downsample_image_file_for_maxdpi(
         resized.save(image_file, **save_kwargs)
         resized.close()
         return True
+
+def _prepare_image_for_jpeg2000(image: Image.Image) -> Image.Image:
+    if image.mode in ('1', 'L', 'LA', 'P', 'PA', 'La'):
+        return image.convert('L')
+    if image.mode != 'RGB':
+        return image.convert('RGB')
+    return image
+
 
 
 DEFAULT_EXECUTOR = SerialExecutor()

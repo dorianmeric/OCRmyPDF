@@ -10,12 +10,14 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Annotated
 
+from PIL import features
 from pydantic import BaseModel, Field, model_validator
 
 from ocrmypdf import Executor, PdfContext, hookimpl
 from ocrmypdf._exec import jbig2enc, pngquant
 from ocrmypdf._pipeline import get_pdf_save_settings
 from ocrmypdf.cli import numeric
+from ocrmypdf.exceptions import MissingDependencyError
 from ocrmypdf.optimize import optimize
 from ocrmypdf.subprocess import check_external_program
 
@@ -43,6 +45,10 @@ class OptimizeOptions(BaseModel):
         float,
         Field(ge=0.4, le=0.9, description="JBIG2 symbol classification threshold"),
     ] = 0.85
+    force_jpeg2k: Annotated[
+        bool,
+        Field(description="Force re-encoding embedded color/grayscale images (including PNG) into JPEG2000"),
+    ] = False
 
     @classmethod
     def add_arguments_to_parser(cls, parser, namespace: str = 'optimize'):
@@ -126,13 +132,24 @@ class OptimizeOptions(BaseModel):
                 "(default 0.85), range 0.4 to 0.9."
             ),
         )
+        optimizing.add_argument(
+            '--force-jpeg2k',
+            action='store_true',
+            default=False,
+            help=(
+                "Force re-encoding embedded color/grayscale images (including PNG) into JPEG2000, before "
+                "embedding into the output PDF."
+            ),
+        )
 
     @model_validator(mode='after')
     def validate_optimization_consistency(self):
         """Validate optimization options are consistent."""
-        if self.level == 0 and any([self.png_quality > 0, self.jpeg_quality > 0]):
+        if self.level == 0 and any(
+            [self.png_quality > 0, self.jpeg_quality > 0, self.force_jpeg2k]
+        ):
             log.warning(
-                "The arguments --png-quality and --jpeg-quality "
+                "The arguments --png-quality, --jpeg-quality, and --force-jpeg2k "
                 "will be ignored because --optimize=0."
             )
         return self
@@ -171,6 +188,12 @@ def add_options(parser):
 @hookimpl
 def check_options(options):
     """Check external dependencies for optimization."""
+    if options.force_jpeg2k and not features.check('jpg_2000'):
+        raise MissingDependencyError(
+            "--force-jpeg2k requires Pillow JPEG2000 support, but this Pillow "
+            "build does not provide it."
+        )
+
     # Warn about deprecated options
     if getattr(options, 'jbig2_lossy', False):
         log.warning(

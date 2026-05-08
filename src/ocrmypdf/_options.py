@@ -176,6 +176,7 @@ class OcrOptions(BaseModel):
     jpg_quality: int | None = None
     png_quality: int | None = None
     jbig2_threshold: float = 0.85
+    force_jpeg2k: bool = False
 
     # Compatibility alias for plugins that expect jpeg_quality
     @property
